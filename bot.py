@@ -4,6 +4,7 @@ import datetime as dt
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import time
@@ -19,18 +20,55 @@ from limits import (MAX_TRACK, MAX_QUEUE, DAILY_SECONDS, IDLE_SECONDS, AUDIO_BIT
 log = logging.getLogger('music')
 
 
+def safe_diagnostic(value):
+    for key in ('DISCORD_TOKEN', 'RENDER_API_KEY', 'GH_TOKEN', 'GITHUB_TOKEN'):
+        secret = os.environ.get(key)
+        if secret:
+            value = value.replace(secret, '[secret]')
+    value = re.sub(r'https?://\S+', '[url]', value)
+    value = re.sub(r'(?i)(authorization|cookie|token|password)\s*[:=]\s*\S+', r'\1=[redacted]', value)
+    value = re.sub(r'[\x00-\x08\x0b-\x1f\x7f]', '', value)
+    return value[-1600:]
+
+
+def youtube_failure(detail, stage):
+    lower = detail.lower().replace('’', "'")
+    if 'not a bot' in lower or 'confirm you' in lower:
+        code, message = 'YT_LOGIN', 'YouTube żąda potwierdzenia, że użytkownik nie jest botem. Serwer nie uzyskał dostępu.'
+    elif '429' in lower or 'too many requests' in lower:
+        code, message = 'YT_RATE_LIMIT', 'YouTube ograniczył liczbę żądań z serwera. Nie ponawiaj teraz komendy.'
+    elif '403' in lower or 'forbidden' in lower:
+        code, message = 'YT_FORBIDDEN', 'YouTube odrzucił dostęp do materiału (HTTP 403).'
+    elif 'requested format is not available' in lower:
+        code, message = 'YT_FORMAT', 'YouTube nie udostępnił obsługiwanego formatu audio.'
+    elif any(word in lower for word in ('javascript runtime', 'challenge solving', 'n challenge', 'signature solving')):
+        code, message = 'YT_JS', 'Nie udało się przetworzyć odtwarzacza YouTube; wymagana jest korekta ekstraktora.'
+    elif any(word in lower for word in ('private video', 'video unavailable', 'not available', 'age-restricted', 'sign in')):
+        code, message = 'YT_UNAVAILABLE', 'Materiał jest niedostępny lub wymaga zalogowania.'
+    else:
+        code, message = 'YT_EXTRACT', 'Nie udało się odczytać danych YouTube. Szczegóły zapisano w logach Render.'
+    return f'{message} [{stage}/{code}]'
+
+
 async def ytdlp_json(target, *options):
+    stage = 'search' if target.startswith('ytsearch') else ('playlist' if '--flat-playlist' in options else 'audio')
     proc = await asyncio.create_subprocess_exec(
         sys.executable, '-m', 'yt_dlp', '--ignore-config',
-        '--skip-download', '--dump-single-json', '--no-warnings',
+        '--skip-download', '--dump-single-json',
         '--socket-timeout', '10', '--retries', '1', '--extractor-retries', '1',
         '--no-cache-dir', *options, '--', target,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )
     try:
-        output, _ = await asyncio.wait_for(proc.communicate(), 40)
+        try:
+            output, error = await asyncio.wait_for(proc.communicate(), 40)
+        except asyncio.TimeoutError:
+            log.warning('YouTube stage=%s code=TIMEOUT', stage)
+            raise ValueError(f'YouTube nie odpowiedział w ciągu 40 sekund. [{stage}/YT_TIMEOUT]') from None
         if proc.returncode:
-            raise ValueError('YouTube nie udostępnił audio. Spróbuj innego filmu; nie ponawiam automatycznie.')
+            detail = (error or b'').decode('utf-8', errors='replace')
+            log.warning('YouTube stage=%s exit=%s details=%s', stage, proc.returncode, safe_diagnostic(detail))
+            raise ValueError(youtube_failure(detail, stage))
         return json.loads(output)
     finally:
         if proc.returncode is None:
@@ -390,6 +428,7 @@ async def main():
     async def health(request):
         return web.json_response({'status': 'ok', 'discord_ready': bot.is_ready()})
     app.router.add_get('/health', health)
+    app.router.add_get('/', health)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, '0.0.0.0', int(os.environ.get('PORT', '10000'))).start()

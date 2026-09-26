@@ -4,10 +4,21 @@ from unittest.mock import AsyncMock, patch
 
 from limits import youtube_url, track_duration, DAILY_SECONDS, listener_stop_reason, playlist_url
 from types import SimpleNamespace
-from bot import MusicBot, register, extract, resolve, recommendation, play_input, playlist_tracks
+from bot import (MusicBot, register, extract, resolve, recommendation, play_input, playlist_tracks,
+                 youtube_failure, safe_diagnostic, ytdlp_json)
 
 
 class LimitsTests(unittest.TestCase):
+    def test_diagnostic_classification_and_redaction(self):
+        self.assertIn('audio/YT_LOGIN', youtube_failure("Sign in to confirm you're not a bot", 'audio'))
+        self.assertIn('YT_FORMAT', youtube_failure('Requested format is not available', 'audio'))
+        self.assertIn('YT_RATE_LIMIT', youtube_failure('HTTP Error 429: Too Many Requests', 'search'))
+        with patch.dict('os.environ', {'DISCORD_TOKEN': 'test-secret-value'}):
+            detail = safe_diagnostic('test-secret-value https://host.example/?key=secret cookie=private')
+        self.assertNotIn('test-secret-value', detail)
+        self.assertNotIn('host.example', detail)
+        self.assertNotIn('private', detail)
+
     def test_playlist_input_and_single_video(self):
         expected = 'https://www.youtube.com/playlist?list=PLabc123'
         self.assertEqual(play_input('https://www.youtube.com/playlist?list=PLabc123'), expected)
@@ -51,6 +62,14 @@ class LimitsTests(unittest.TestCase):
 
 
 class BotTests(unittest.IsolatedAsyncioTestCase):
+    async def test_failed_extractor_reports_stage(self):
+        from unittest.mock import Mock
+        proc = Mock(returncode=1)
+        proc.communicate = AsyncMock(return_value=(b'', b"ERROR: Sign in to confirm you're not a bot"))
+        with patch('bot.asyncio.create_subprocess_exec', AsyncMock(return_value=proc)):
+            with self.assertRaisesRegex(ValueError, 'search/YT_LOGIN'):
+                await ytdlp_json('ytsearch5:reto ua', '--flat-playlist')
+
     async def test_playlist_bounded_order_and_filtering(self):
         data = {'entries': [
             {'id': 'aaaaaaaaaaa', 'duration': 200},
@@ -233,7 +252,7 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
         proc.wait = AsyncMock()
         with patch('bot.asyncio.create_subprocess_exec', AsyncMock(return_value=proc)):
-            with self.assertRaises(asyncio.TimeoutError):
+            with self.assertRaisesRegex(ValueError, 'YT_TIMEOUT'):
                 await extract('https://www.youtube.com/watch?v=abcdefghijk')
         proc.kill.assert_called_once()
         proc.wait.assert_awaited_once()
