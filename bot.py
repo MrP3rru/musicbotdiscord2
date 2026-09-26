@@ -14,7 +14,7 @@ from discord import app_commands
 from aiohttp import web
 
 from limits import (MAX_TRACK, MAX_QUEUE, DAILY_SECONDS, IDLE_SECONDS, AUDIO_BITRATE,
-                    youtube_url, track_duration, listener_stop_reason)
+                    youtube_url, track_duration, listener_stop_reason, playlist_url, PLAYLIST_SCAN_LIMIT)
 
 log = logging.getLogger('music')
 
@@ -43,7 +43,7 @@ def play_input(value):
     if not value or len(value) > 200:
         raise ValueError('Podaj nazwę utworu lub link (maksymalnie 200 znaków).')
     if '://' in value or value.startswith(('www.', 'youtu.be/')):
-        return youtube_url(value)
+        return playlist_url(value) or youtube_url(value)
     return value
 
 
@@ -77,6 +77,16 @@ async def recommendation(video_id, seen):
                              '--flat-playlist', '--playlist-end', '10')
     matches = candidates(data, seen)
     return matches[0][1] if matches else None
+
+
+async def playlist_tracks(url):
+    data = await ytdlp_json(playlist_url(url), '--yes-playlist', '--flat-playlist',
+                             '--playlist-end', str(PLAYLIST_SCAN_LIMIT))
+    entries = list(data.get('entries') or [])[:PLAYLIST_SCAN_LIMIT]
+    # Preserve playlist order, but do not enqueue duplicate videos.
+    matches = candidates({'entries': entries})
+    urls = list(dict.fromkeys(item[1] for item in matches))
+    return urls, len(entries)
 
 
 async def extract(url):
@@ -182,6 +192,18 @@ class MusicBot(discord.Client):
                 try:
                     if self.budget() < MAX_TRACK + 1:
                         raise ValueError('Wyczerpano dzisiejszy limit odtwarzania.')
+                    if playlist_url(url):
+                        urls, scanned = await playlist_tracks(url)
+                        # Recheck available space after network I/O: commands can add items meanwhile.
+                        selected = urls[:1 + max(0, MAX_QUEUE - len(self.queue))]
+                        if not selected:
+                            raise ValueError('W pierwszych 10 pozycjach playlisty brak dostępnych utworów do 5 minut.')
+                        self.queue.extendleft(reversed([(item, text_channel) for item in selected[1:]]))
+                        url = selected[0]
+                        await self.say(text_channel, f'Playlista: dodano {len(selected)} utworów, '
+                                       f'pominięto {scanned - len(selected)} z {scanned} sprawdzonych. '
+                                       f'Sprawdzam maksymalnie {PLAYLIST_SCAN_LIMIT} pierwszych pozycji; '
+                                       'dalsza część playlisty nie jest importowana.')
                     url = await resolve(url)
                     info, duration = await extract(url)
                     if not self.voice or not self.voice.is_connected():
@@ -273,8 +295,8 @@ class MusicBot(discord.Client):
 
 
 def register(bot):
-    @bot.tree.command(name='play', description='Znajdź utwór po nazwie lub odtwórz link YouTube.')
-    @app_commands.describe(utwor='Np. reto ua lub link YouTube (maks. 5 minut)')
+    @bot.tree.command(name='play', description='Podaj nazwę utworu, link do filmu lub playlisty YouTube.')
+    @app_commands.describe(utwor='Np. reto ua, link do filmu lub playlisty YouTube')
     async def play(interaction: discord.Interaction, utwor: str):
         await interaction.response.defer(ephemeral=True)
         try:

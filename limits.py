@@ -7,6 +7,26 @@ MAX_QUEUE = 3
 DAILY_SECONDS = 7200
 IDLE_SECONDS = 60
 AUDIO_BITRATE = 48
+PLAYLIST_SCAN_LIMIT = 10
+
+
+def playlist_url(value):
+    """Return a canonical playlist URL, or None for a non-playlist input."""
+    try:
+        url = urlsplit(value.strip())
+        query = parse_qs(url.query, keep_blank_values=True)
+        if 'list' not in query:
+            return None
+        if (url.scheme != 'https' or url.username or url.password or url.port
+                or url.hostname not in {'youtube.com', 'www.youtube.com', 'm.youtube.com',
+                                        'music.youtube.com', 'youtu.be'}):
+            raise ValueError()
+        ids = query['list']
+        if len(ids) != 1 or not re.fullmatch(r'[A-Za-z0-9_-]{2,100}', ids[0]):
+            raise ValueError()
+        return 'https://www.youtube.com/playlist?list=' + ids[0]
+    except ValueError:
+        raise ValueError('Podaj poprawny link HTTPS do playlisty YouTube.') from None
 
 
 def listener_stop_reason(members):

@@ -12,7 +12,12 @@ Python 3.11, discord.py z DAVE, yt-dlp, Deno i FFmpeg w obrazie Docker.
 - Maksymalnie 5 minut na film, 3 oczekujące linki, jedno dodanie co 15 sekund globalnie.
 - `/play utwor:reto ua` szuka 5 wyników YouTube i wybiera najczęściej oglądany spośród
   wyników o znanej długości do 5 minut. To nie gwarantuje najpopularniejszego filmu w całym YouTube.
-  Można również podać pojedynczy link. Playlisty użytkownika i live są wyłączone.
+  Można również podać pojedynczy link lub link playlisty YouTube. Live są wyłączone.
+- Playlisty: bot sprawdza tylko pierwsze 10 pozycji, pomija niedostępne, duplikaty oraz filmy
+  o nieznanej długości lub dłuższe niż 5 minut. Dodaje maksymalnie bieżący utwór + 3 oczekujące,
+  pomniejszone o zajęte miejsca kolejki. Zachowuje kolejność playlisty i informuje o pominięciach.
+  Dalsza część dużej playlisty nie jest importowana. Link filmu z `list=` importuje playlistę;
+  żeby odtworzyć tylko film, usuń `list=` z linku. Prywatne playlisty wymagające logowania nie są obsługiwane.
 - Autoplay jest domyślnie włączony przy nowym połączeniu: po zakończeniu utworu i wyczerpaniu
   ręcznej kolejki pobiera do 10 propozycji miksu YouTube (RD) i wybiera pierwszą pasującą,
   której nie ma w historii ostatnich 100 utworów. Bez logowania i personalizacji konta YouTube.

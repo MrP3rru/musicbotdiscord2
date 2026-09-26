@@ -2,12 +2,23 @@ import asyncio
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from limits import youtube_url, track_duration, DAILY_SECONDS, listener_stop_reason
+from limits import youtube_url, track_duration, DAILY_SECONDS, listener_stop_reason, playlist_url
 from types import SimpleNamespace
-from bot import MusicBot, register, extract, resolve, recommendation, play_input
+from bot import MusicBot, register, extract, resolve, recommendation, play_input, playlist_tracks
 
 
 class LimitsTests(unittest.TestCase):
+    def test_playlist_input_and_single_video(self):
+        expected = 'https://www.youtube.com/playlist?list=PLabc123'
+        self.assertEqual(play_input('https://www.youtube.com/playlist?list=PLabc123'), expected)
+        self.assertEqual(play_input('https://youtu.be/abcdefghijk?list=PLabc123'), expected)
+        self.assertEqual(play_input('https://youtu.be/abcdefghijk'), 'https://www.youtube.com/watch?v=abcdefghijk')
+        self.assertIsNone(playlist_url('reto ua'))
+        for url in ['https://evil.com/playlist?list=PLabc', 'https://youtube.com/playlist?list=',
+                    'https://youtube.com/playlist?list=PLabc&list=PLdef']:
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                play_input(url)
+
     def test_listener_states(self):
         def member(bot=False, **states):
             voice = dict(self_mute=False, mute=False, self_deaf=False, deaf=False)
@@ -40,6 +51,42 @@ class LimitsTests(unittest.TestCase):
 
 
 class BotTests(unittest.IsolatedAsyncioTestCase):
+    async def test_playlist_bounded_order_and_filtering(self):
+        data = {'entries': [
+            {'id': 'aaaaaaaaaaa', 'duration': 200},
+            {'id': 'bbbbbbbbbbb', 'duration': 600},
+            {'id': 'aaaaaaaaaaa', 'duration': 200},
+            {'id': 'ccccccccccc', 'duration': 150}, None]}
+        with patch('bot.ytdlp_json', AsyncMock(return_value=data)) as fetch:
+            urls, count = await playlist_tracks('https://www.youtube.com/playlist?list=PLabc')
+        self.assertEqual(count, 5)
+        self.assertEqual(urls, ['https://www.youtube.com/watch?v=aaaaaaaaaaa',
+                               'https://www.youtube.com/watch?v=ccccccccccc'])
+        self.assertEqual(fetch.call_args.args[-2:], ('--playlist-end', '10'))
+
+    async def test_playlist_expansion_respects_existing_queue_capacity(self):
+        from unittest.mock import Mock
+        bot = MusicBot(123)
+        bot.voice = Mock()
+        bot.voice.channel.members = [SimpleNamespace(bot=False, voice=SimpleNamespace(
+            self_mute=False, mute=False, self_deaf=False, deaf=False))]
+        bot.voice.play.side_effect = lambda source, after: after(None)
+        bot.autoplay = False
+        channel = AsyncMock()
+        bot.queue.extend([('https://www.youtube.com/playlist?list=PLabc', channel), ('manual', channel)])
+        info = {'id': 'aaaaaaaaaaa', 'url': 'https://example.com/audio', 'title': 'Test'}
+        async def extraction(value):
+            self.assertLessEqual(len(bot.queue), 3)
+            return info, 100
+        with patch('bot.playlist_tracks', AsyncMock(return_value=(['one', 'two', 'three', 'four'], 4))), \
+             patch('bot.resolve', AsyncMock(side_effect=lambda value: value)), \
+             patch('bot.extract', AsyncMock(side_effect=extraction)) as extracts, \
+             patch('bot.discord.FFmpegOpusAudio', Mock()):
+            await bot.play_queue()
+        self.assertEqual([call.args[0] for call in extracts.await_args_list], ['one', 'two', 'three', 'manual'])
+        bot.voice = None
+        await bot.close()
+
     async def test_finished_track_queues_mix_once_and_stops_on_error(self):
         from unittest.mock import Mock
         bot = MusicBot(123)
