@@ -40,9 +40,29 @@ class LimitsTests(unittest.TestCase):
 
 
 class BotTests(unittest.IsolatedAsyncioTestCase):
+    async def test_dynamic_channel_and_cross_channel_controls(self):
+        from unittest.mock import Mock
+        import discord
+        bot = MusicBot(123)
+        channel = Mock(spec=discord.VoiceChannel)
+        channel.id = 456
+        interaction = SimpleNamespace(guild_id=123, user=SimpleNamespace(
+            voice=SimpleNamespace(channel=channel)))
+        self.assertIs(bot.check(interaction), channel)
+        bot.voice = SimpleNamespace(channel=SimpleNamespace(id=789))
+        with self.assertRaises(ValueError):
+            bot.check(interaction)
+        bot.voice = None
+        channel.id = 789
+        self.assertIs(bot.check(interaction), channel)
+        interaction.user.voice = None
+        with self.assertRaises(ValueError):
+            bot.check(interaction)
+        await bot.close()
+
     async def test_auto_stop_clears_and_does_not_resume(self):
         from unittest.mock import Mock
-        bot = MusicBot(123, 456)
+        bot = MusicBot(123)
         bot.voice = AsyncMock()
         bot.voice.stop = Mock()
         bot.voice.channel.members = [SimpleNamespace(bot=False, voice=SimpleNamespace(
@@ -62,7 +82,7 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         await bot.close()
 
     async def test_active_listener_prevents_auto_stop(self):
-        bot = MusicBot(123, 456)
+        bot = MusicBot(123)
         bot.voice = SimpleNamespace(channel=SimpleNamespace(members=[SimpleNamespace(
             bot=False, voice=SimpleNamespace(self_mute=False, mute=False, self_deaf=False, deaf=False))]))
         self.assertFalse(await bot.stop_if_unattended())
@@ -70,7 +90,7 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         await bot.close()
 
     async def test_commands_and_budget(self):
-        bot = MusicBot(123, 456)
+        bot = MusicBot(123)
         register(bot)
         self.assertEqual({c.name for c in bot.tree.get_commands()}, {'play', 'skip', 'stop', 'queue'})
         self.assertEqual(bot.budget(), DAILY_SECONDS)
@@ -81,7 +101,7 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         await bot.close()
 
     async def test_stop_cancels_worker_and_disconnects(self):
-        bot = MusicBot(123, 456)
+        bot = MusicBot(123)
         bot.voice = AsyncMock()
         from unittest.mock import Mock
         bot.voice.stop = Mock()

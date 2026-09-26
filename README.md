@@ -5,7 +5,8 @@ Python 3.11, discord.py z DAVE, yt-dlp, Deno i FFmpeg w obrazie Docker.
 
 ## Ograniczenia
 
-- Jeden skonfigurowany serwer i jeden zwykły kanał głosowy.
+- Jeden skonfigurowany serwer. Dowolny zwykły kanał głosowy, ale tylko jeden naraz.
+  Bot dołącza do kanału osoby używającej `/play`. Sterowanie wymaga obecności na kanale bota.
 - Audio wychodzące: Opus 48 kb/s, stała przepływność, bez wideo. To kompromis jakościowy;
   różnica względem wyższej jakości może być słyszalna, szczególnie w muzyce stereo.
 - Maksymalnie 5 minut na film, 3 oczekujące linki, jedno dodanie co 15 sekund globalnie.
@@ -34,17 +35,18 @@ Liczba słuchaczy tego samego kanału nie mnoży strumieni wysyłanych przez bot
    sekret na Render. Nie wpisuj go do repozytorium ani czatu. Privileged Gateway Intents nie są potrzebne.
 2. W OAuth2 URL Generator wybierz `bot` i `applications.commands`, a uprawnienia:
    View Channels, Send Messages, Connect, Speak. Zaproś bota na swój serwer. Administrator nie jest potrzebny.
-3. W Discord włącz Ustawienia → Zaawansowane → Tryb dewelopera. Skopiuj ID serwera
-   i ID zwykłego kanału głosowego, na którym ma grać bot.
+3. W Discord włącz Ustawienia → Zaawansowane → Tryb dewelopera. Skopiuj ID serwera.
+   ID kanału nie jest potrzebne.
 4. Umieść pliki projektu w swoim repozytorium GitHub (bez `.env` i `.venv`).
 5. Render → New → Web Service → wybierz repo → Runtime: Docker → Instance: Free.
    Alternatywnie użyj New → Blueprint z dołączonym `render.yaml`.
-6. W Environment ustaw `DISCORD_TOKEN`, `GUILD_ID`, `VOICE_CHANNEL_ID`.
+6. W Environment ustaw `DISCORD_TOKEN`, `GUILD_ID`.
    Health Check Path: `/health`. Nie ustawiaj Build Command ani Start Command — odpowiada za nie Dockerfile.
 7. Deploy. Otwórz `https://NAZWA.onrender.com/health`. Pole `discord_ready` powinno mieć wartość `true`.
    HTTP 200 oznacza działający proces HTTP, a nie potwierdzenie sprawności audio.
 8. UptimeRobot → monitor HTTP(S) → ten sam adres `/health`, interwał 5 minut, jeżeli dostępny w Twoim planie.
-9. Wejdź na skonfigurowany kanał i użyj `/play link:LINK_DO_FILMU`. Sprawdź `/queue`, `/skip`, `/stop`.
+9. Wejdź na dowolny zwykły kanał głosowy dostępny dla bota i użyj `/play link:LINK_DO_FILMU`.
+   Sprawdź `/queue`, `/skip`, `/stop`. Na wszystkich tych kanałach bot potrzebuje View Channel, Connect i Speak.
 10. Na Render sprawdzaj Metrics → Outbound Bandwidth oraz Billing → zużycie całego workspace.
     Bez podpiętej metody płatności przekroczenie transferu skutkuje zawieszeniem usług do kolejnego miesiąca;
     z metodą płatności może skutkować naliczeniem opłat. https://render.com/docs/free

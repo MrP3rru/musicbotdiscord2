@@ -9,5 +9,3 @@ services:
         sync: false
       - key: GUILD_ID
         sync: false
-      - key: VOICE_CHANNEL_ID
-        sync: false

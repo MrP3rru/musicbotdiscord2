@@ -43,13 +43,13 @@ async def extract(url):
 
 
 class MusicBot(discord.Client):
-    def __init__(self, guild_id, channel_id):
+    def __init__(self, guild_id):
         intents = discord.Intents.none()
         intents.guilds = True
         intents.voice_states = True
         super().__init__(intents=intents, allowed_mentions=discord.AllowedMentions.none())
         self.tree = app_commands.CommandTree(self)
-        self.guild_id, self.channel_id = guild_id, channel_id
+        self.guild_id = guild_id
         self.queue = deque()
         self.lock = asyncio.Lock()
         self.voice = None
@@ -71,8 +71,11 @@ class MusicBot(discord.Client):
         if interaction.guild_id != self.guild_id:
             raise ValueError('Bot działa tylko na skonfigurowanym serwerze.')
         state = getattr(interaction.user, 'voice', None)
-        if not state or not state.channel or state.channel.id != self.channel_id:
-            raise ValueError('Wejdź na kanał głosowy skonfigurowany dla bota.')
+        if not state or not isinstance(state.channel, discord.VoiceChannel):
+            raise ValueError('Wejdź na zwykły kanał głosowy na tym serwerze.')
+        if self.voice and self.voice.channel.id != state.channel.id:
+            raise ValueError('Bot jest już na innym kanale. Dołącz do niego lub poczekaj na rozłączenie.')
+        return state.channel
 
     async def stop_if_unattended(self):
         """Caller holds lock. Stop, destroy audio process, clear queue; never auto-resume."""
@@ -91,7 +94,8 @@ class MusicBot(discord.Client):
     async def on_voice_state_update(self, member, before, after):
         if member.guild.id != self.guild_id:
             return
-        if not any(channel and channel.id == self.channel_id for channel in (before.channel, after.channel)):
+        if not self.voice or not any(channel and channel.id == self.voice.channel.id
+                                     for channel in (before.channel, after.channel)):
             return
         async with self.lock:
             await self.stop_if_unattended()
@@ -207,9 +211,7 @@ def register(bot):
             bot.check(interaction)
             url = youtube_url(link)
             async with bot.lock:
-                channel = bot.get_channel(bot.channel_id)
-                if not isinstance(channel, discord.VoiceChannel):
-                    raise ValueError('VOICE_CHANNEL_ID musi wskazywać zwykły kanał głosowy.')
+                channel = bot.check(interaction)
                 reason = listener_stop_reason(channel.members)
                 if reason:
                     raise ValueError(reason + ' Przynajmniej jedna osoba musi mieć włączony mikrofon i odsłuch.')
@@ -254,6 +256,7 @@ def register(bot):
         try:
             bot.check(interaction)
             async with bot.lock:
+                bot.check(interaction)
                 await bot.stop()
             message = 'Zatrzymano odtwarzanie i rozłączono bota.'
         except ValueError as exc:
@@ -274,9 +277,9 @@ def register(bot):
 
 async def main():
     token = os.environ.get('DISCORD_TOKEN')
-    if not token or not os.environ.get('GUILD_ID') or not os.environ.get('VOICE_CHANNEL_ID'):
-        raise SystemExit('Ustaw DISCORD_TOKEN, GUILD_ID i VOICE_CHANNEL_ID w Environment na Render.')
-    bot = MusicBot(int(os.environ['GUILD_ID']), int(os.environ['VOICE_CHANNEL_ID']))
+    if not token or not os.environ.get('GUILD_ID'):
+        raise SystemExit('Ustaw DISCORD_TOKEN i GUILD_ID w Environment na Render.')
+    bot = MusicBot(int(os.environ['GUILD_ID']))
     register(bot)
     app = web.Application()
     async def health(request):
