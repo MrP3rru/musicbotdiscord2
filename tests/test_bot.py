@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 from limits import youtube_url, track_duration, DAILY_SECONDS, listener_stop_reason
 from types import SimpleNamespace
-from bot import MusicBot, register, extract
+from bot import MusicBot, register, extract, resolve, recommendation, play_input
 
 
 class LimitsTests(unittest.TestCase):
@@ -40,6 +40,71 @@ class LimitsTests(unittest.TestCase):
 
 
 class BotTests(unittest.IsolatedAsyncioTestCase):
+    async def test_finished_track_queues_mix_once_and_stops_on_error(self):
+        from unittest.mock import Mock
+        bot = MusicBot(123)
+        bot.voice = Mock()
+        bot.voice.channel.members = [SimpleNamespace(bot=False, voice=SimpleNamespace(
+            self_mute=False, mute=False, self_deaf=False, deaf=False))]
+        bot.voice.play.side_effect = lambda source, after: after(None)
+        channel = AsyncMock()
+        bot.queue.append(('first', channel))
+        info = {'id': 'aaaaaaaaaaa', 'url': 'https://example.com/audio', 'title': 'Test'}
+        with patch('bot.resolve', AsyncMock(side_effect=lambda value: value)), \
+             patch('bot.extract', AsyncMock(side_effect=[(info, 100), ValueError('unavailable')])), \
+             patch('bot.recommendation', AsyncMock(return_value='next')) as recommend, \
+             patch('bot.discord.FFmpegOpusAudio', Mock()):
+            await bot.play_queue()
+        recommend.assert_awaited_once()
+        self.assertFalse(bot.queue)
+        self.assertIsNone(bot.current)
+        self.assertEqual(bot.used, 100)
+        bot.voice = None
+        await bot.close()
+
+    async def test_manual_queue_has_priority_and_disabled_autoplay_stops(self):
+        from unittest.mock import Mock
+        bot = MusicBot(123)
+        bot.voice = Mock()
+        bot.voice.channel.members = [SimpleNamespace(bot=False, voice=SimpleNamespace(
+            self_mute=False, mute=False, self_deaf=False, deaf=False))]
+        bot.voice.play.side_effect = lambda source, after: after(None)
+        channel = AsyncMock()
+        bot.queue.extend([('first', channel), ('second', channel)])
+        info = {'id': 'aaaaaaaaaaa', 'url': 'https://example.com/audio', 'title': 'Test'}
+        async def extraction(value):
+            if value == 'second':
+                bot.autoplay = False
+            return info, 100
+        with patch('bot.resolve', AsyncMock(side_effect=lambda value: value)), \
+             patch('bot.extract', AsyncMock(side_effect=extraction)) as extract_mock, \
+             patch('bot.recommendation', AsyncMock()) as recommend, \
+             patch('bot.discord.FFmpegOpusAudio', Mock()):
+            await bot.play_queue()
+        self.assertEqual([call.args[0] for call in extract_mock.await_args_list], ['first', 'second'])
+        recommend.assert_not_awaited()
+        bot.voice = None
+        await bot.close()
+
+    async def test_search_selects_popular_eligible_result(self):
+        data = {'entries': [
+            {'id': 'aaaaaaaaaaa', 'duration': 200, 'view_count': 100},
+            {'id': 'bbbbbbbbbbb', 'duration': 220, 'view_count': 1000},
+            {'id': 'ccccccccccc', 'duration': 600, 'view_count': 10000}]}
+        with patch('bot.ytdlp_json', AsyncMock(return_value=data)) as fetch:
+            self.assertEqual(await resolve(play_input('reto ua')), 'https://www.youtube.com/watch?v=bbbbbbbbbbb')
+            self.assertEqual(fetch.call_args.args[0], 'ytsearch5:reto ua')
+
+    async def test_mix_excludes_history_and_preserves_order(self):
+        data = {'entries': [
+            {'id': 'aaaaaaaaaaa', 'duration': 200},
+            {'id': 'bbbbbbbbbbb', 'duration': 220},
+            {'id': 'ccccccccccc', 'duration': 150}]}
+        with patch('bot.ytdlp_json', AsyncMock(return_value=data)):
+            self.assertEqual(await recommendation('aaaaaaaaaaa', ['aaaaaaaaaaa']),
+                             'https://www.youtube.com/watch?v=bbbbbbbbbbb')
+            self.assertIsNone(await recommendation('aaaaaaaaaaa', ['aaaaaaaaaaa', 'bbbbbbbbbbb', 'ccccccccccc']))
+
     async def test_dynamic_channel_and_cross_channel_controls(self):
         from unittest.mock import Mock
         import discord
@@ -92,7 +157,7 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
     async def test_commands_and_budget(self):
         bot = MusicBot(123)
         register(bot)
-        self.assertEqual({c.name for c in bot.tree.get_commands()}, {'play', 'skip', 'stop', 'queue'})
+        self.assertEqual({c.name for c in bot.tree.get_commands()}, {'play', 'skip', 'stop', 'queue', 'autoplay'})
         self.assertEqual(bot.budget(), DAILY_SECONDS)
         bot.used = 100
         self.assertEqual(bot.budget(), DAILY_SECONDS - 100)

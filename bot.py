@@ -19,27 +19,72 @@ from limits import (MAX_TRACK, MAX_QUEUE, DAILY_SECONDS, IDLE_SECONDS, AUDIO_BIT
 log = logging.getLogger('music')
 
 
-async def extract(url):
+async def ytdlp_json(target, *options):
     proc = await asyncio.create_subprocess_exec(
-        sys.executable, '-m', 'yt_dlp', '--ignore-config', '--no-playlist',
+        sys.executable, '-m', 'yt_dlp', '--ignore-config',
         '--skip-download', '--dump-single-json', '--no-warnings',
         '--socket-timeout', '10', '--retries', '1', '--extractor-retries', '1',
-        '--no-cache-dir', '-f', 'bestaudio[abr<=80]/worstaudio', url,
+        '--no-cache-dir', *options, '--', target,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
     )
     try:
         output, _ = await asyncio.wait_for(proc.communicate(), 40)
         if proc.returncode:
             raise ValueError('YouTube nie udostępnił audio. Spróbuj innego filmu; nie ponawiam automatycznie.')
-        info = json.loads(output)
-        duration = track_duration(info)
-        if not info.get('url', '').startswith('https://'):
-            raise ValueError('Brak obsługiwanego strumienia audio.')
-        return info, duration
+        return json.loads(output)
     finally:
         if proc.returncode is None:
             proc.kill()
             await proc.wait()
+
+
+def play_input(value):
+    value = value.strip()
+    if not value or len(value) > 200:
+        raise ValueError('Podaj nazwę utworu lub link (maksymalnie 200 znaków).')
+    if '://' in value or value.startswith(('www.', 'youtu.be/')):
+        return youtube_url(value)
+    return value
+
+
+def candidates(data, seen=()):
+    results = []
+    for entry in data.get('entries') or []:
+        if not entry or entry.get('id') in seen:
+            continue
+        try:
+            track_duration(entry)
+            url = youtube_url('https://youtu.be/' + (entry.get('id') or ''))
+        except ValueError:
+            continue
+        results.append((entry, url))
+    return results
+
+
+async def resolve(query):
+    if query.startswith('https://'):
+        return youtube_url(query)
+    data = await ytdlp_json('ytsearch5:' + query, '--flat-playlist', '--playlist-end', '5')
+    matches = candidates(data)
+    if not matches:
+        raise ValueError('Nie znaleziono pasującego utworu do 5 minut.')
+    return max(matches, key=lambda item: item[0].get('view_count') or 0)[1]
+
+
+async def recommendation(video_id, seen):
+    url = youtube_url('https://youtu.be/' + video_id)
+    data = await ytdlp_json(url + '&list=RD' + video_id, '--yes-playlist',
+                             '--flat-playlist', '--playlist-end', '10')
+    matches = candidates(data, seen)
+    return matches[0][1] if matches else None
+
+
+async def extract(url):
+    info = await ytdlp_json(url, '--no-playlist', '-f', 'bestaudio[abr<=80]/worstaudio')
+    duration = track_duration(info)
+    if not info.get('url', '').startswith('https://'):
+        raise ValueError('Brak obsługiwanego strumienia audio.')
+    return info, duration
 
 
 class MusicBot(discord.Client):
@@ -61,6 +106,9 @@ class MusicBot(discord.Client):
         self.day = ''
         self.used = 0
         self.text_channel = None
+        self.autoplay = True
+        self.seen = deque(maxlen=100)
+        self.skipped = False
 
     async def setup_hook(self):
         self.tree.copy_global_to(guild=discord.Object(id=self.guild_id))
@@ -87,7 +135,7 @@ class MusicBot(discord.Client):
             await self.stop()
             if channel:
                 await self.say(channel, f'⏹ {reason} Zatrzymano muzykę i wyczyszczono kolejkę. '
-                               'Po powrocie i odciszeniu użyj /play z linkiem — muzyka nie wznowi się sama.')
+                               'Po powrocie i odciszeniu użyj /play — muzyka nie wznowi się sama.')
             return True
         return False
 
@@ -107,6 +155,8 @@ class MusicBot(discord.Client):
         return DAILY_SECONDS - self.used
 
     async def stop(self):
+        self.autoplay = False
+        self.seen.clear()
         self.queue.clear()
         if self.worker:
             self.worker.cancel()
@@ -127,9 +177,12 @@ class MusicBot(discord.Client):
                 url, text_channel = self.queue.popleft()
                 self.current = 'Przygotowanie utworu…'
                 source = None
+                completed = False
+                self.skipped = False
                 try:
                     if self.budget() < MAX_TRACK + 1:
                         raise ValueError('Wyczerpano dzisiejszy limit odtwarzania.')
+                    url = await resolve(url)
                     info, duration = await extract(url)
                     if not self.voice or not self.voice.is_connected():
                         raise ValueError('Utracono połączenie z kanałem głosowym.')
@@ -137,6 +190,7 @@ class MusicBot(discord.Client):
                         self.queue.clear()
                         raise ValueError('Brak aktywnych słuchaczy. Po odciszeniu uruchom /play ponownie.')
                     self.used += duration  # Reserve full duration, also for skipped tracks.
+                    self.seen.append(info['id'])
                     self.current = discord.utils.escape_markdown(info.get('title', 'Utwór')[:150])
                     source = discord.FFmpegOpusAudio(
                         info['url'], bitrate=AUDIO_BITRATE, codec='libopus',
@@ -156,6 +210,7 @@ class MusicBot(discord.Client):
                     await asyncio.wait_for(done.wait(), duration + 15)
                     if errors:
                         raise ValueError('Odtwarzanie zostało przerwane.')
+                    completed = not self.skipped
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
@@ -168,6 +223,21 @@ class MusicBot(discord.Client):
                     if source:
                         source.cleanup()
                     self.current = None
+                if completed and self.autoplay and not self.queue and self.budget() >= MAX_TRACK + 1:
+                    self.current = 'Szukanie kolejnego utworu w miksie YouTube…'
+                    try:
+                        next_url = await recommendation(info['id'], self.seen)
+                        if (next_url and self.autoplay and not self.queue and self.voice
+                                and self.voice.is_connected()
+                                and not listener_stop_reason(self.voice.channel.members)):
+                            self.queue.append((next_url, text_channel))
+                        elif not next_url and self.autoplay and not self.queue:
+                            await self.say(text_channel, 'Brak kolejnej propozycji w miksie YouTube. Użyj /play.')
+                    except Exception as exc:
+                        log.warning('Recommendations failed: %s', type(exc).__name__)
+                        await self.say(text_channel, 'Miks YouTube jest niedostępny. Dodaj następny utwór przez /play.')
+                    finally:
+                        self.current = None
         finally:
             self.current = None
 
@@ -203,13 +273,13 @@ class MusicBot(discord.Client):
 
 
 def register(bot):
-    @bot.tree.command(name='play', description='Dodaj pojedynczy link YouTube (maks. 5 minut).')
-    @app_commands.describe(link='Link HTTPS do filmu, bez playlisty')
-    async def play(interaction: discord.Interaction, link: str):
+    @bot.tree.command(name='play', description='Znajdź utwór po nazwie lub odtwórz link YouTube.')
+    @app_commands.describe(utwor='Np. reto ua lub link YouTube (maks. 5 minut)')
+    async def play(interaction: discord.Interaction, utwor: str):
         await interaction.response.defer(ephemeral=True)
         try:
             bot.check(interaction)
-            url = youtube_url(link)
+            url = play_input(utwor)
             async with bot.lock:
                 channel = bot.check(interaction)
                 reason = listener_stop_reason(channel.members)
@@ -226,12 +296,13 @@ def register(bot):
                     if bot.voice:
                         await bot.voice.disconnect(force=True)
                     bot.voice = await channel.connect(timeout=20, reconnect=False, self_deaf=True)
+                    bot.autoplay = True
                 bot.queue.append((url, interaction.channel))
                 bot.text_channel = interaction.channel
                 bot.empty_since = None
                 if not bot.worker or bot.worker.done():
                     bot.worker = asyncio.create_task(bot.play_queue())
-            await interaction.followup.send('Dodano link. Sprawdzę długość i dostępność przed odtworzeniem.', ephemeral=True)
+            await interaction.followup.send('Dodano utwór. Sprawdzę wyniki, długość i dostępność przed odtworzeniem.', ephemeral=True)
         except Exception as exc:
             log.warning('Play request failed: %s', type(exc).__name__)
             message = str(exc) if isinstance(exc, ValueError) else 'Nie udało się połączyć. Sprawdź uprawnienia bota i konfigurację kanału.'
@@ -242,6 +313,7 @@ def register(bot):
         try:
             bot.check(interaction)
             if bot.voice and bot.voice.is_playing():
+                bot.skipped = True
                 bot.voice.stop()
                 message = 'Pominięto utwór.'
             else:
@@ -268,8 +340,19 @@ def register(bot):
         try:
             bot.check(interaction)
             lines = [f'Teraz: {bot.current or "cisza"}', f'Pozostały limit: {bot.budget() // 60} min',
-                     *[f'{i}. <{item[0]}>' for i, item in enumerate(bot.queue, 1)]]
+                     f'Autoplay: {"włączony" if bot.autoplay else "wyłączony"}',
+                     *[f'{i}. {discord.utils.escape_markdown(item[0])}' for i, item in enumerate(bot.queue, 1)]]
             message = '\n'.join(lines)
+        except ValueError as exc:
+            message = str(exc)
+        await interaction.response.send_message(message, ephemeral=True)
+
+    @bot.tree.command(name='autoplay', description='Włącz lub wyłącz kolejne utwory z miksu YouTube.')
+    async def autoplay(interaction: discord.Interaction, wlacz: bool):
+        try:
+            bot.check(interaction)
+            bot.autoplay = wlacz
+            message = 'Autoplay włączony.' if wlacz else 'Autoplay wyłączony; bieżący utwór i ręczna kolejka pozostają.'
         except ValueError as exc:
             message = str(exc)
         await interaction.response.send_message(message, ephemeral=True)

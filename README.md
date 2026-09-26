@@ -10,10 +10,18 @@ Python 3.11, discord.py z DAVE, yt-dlp, Deno i FFmpeg w obrazie Docker.
 - Audio wychodzące: Opus 48 kb/s, stała przepływność, bez wideo. To kompromis jakościowy;
   różnica względem wyższej jakości może być słyszalna, szczególnie w muzyce stereo.
 - Maksymalnie 5 minut na film, 3 oczekujące linki, jedno dodanie co 15 sekund globalnie.
-- Tylko pojedyncze linki YouTube; bez playlist, live, wyszukiwania i zapętlania.
+- `/play utwor:reto ua` szuka 5 wyników YouTube i wybiera najczęściej oglądany spośród
+  wyników o znanej długości do 5 minut. To nie gwarantuje najpopularniejszego filmu w całym YouTube.
+  Można również podać pojedynczy link. Playlisty użytkownika i live są wyłączone.
+- Autoplay jest domyślnie włączony przy nowym połączeniu: po zakończeniu utworu i wyczerpaniu
+  ręcznej kolejki pobiera do 10 propozycji miksu YouTube (RD) i wybiera pierwszą pasującą,
+  której nie ma w historii ostatnich 100 utworów. Bez logowania i personalizacji konta YouTube.
+  Jeśli miks jest niedostępny, brak propozycji lub wystąpi błąd, bot nie ponawia go w pętli.
+  `/autoplay wlacz:False` wyłącza dobieranie kolejnych piosenek. `/skip` bez ręcznej kolejki
+  kończy granie, nie uruchamia rekomendacji. Limity długości i dzienne nadal obowiązują.
 - Pusty kanał lub wszyscy ludzie wyciszeni (mikrofon ALBO odsłuch, lokalnie lub przez serwer):
   zatrzymanie po zdarzeniu Discord, awaryjna kontrola co 5 sekund. Proces audio zostaje zamknięty,
-  kolejka wyczyszczona, bot rozłączony. Wznowienie wyłącznie nowym `/play link:...`, od początku utworu.
+  kolejka wyczyszczona, bot rozłączony. Wznowienie wyłącznie nowym `/play utwor:...`, od początku utworu.
   Co najmniej jedna osoba musi mieć włączony mikrofon i odsłuch. Boty nie liczą się jako słuchacze.
   Samo wyciszenie mikrofonu nie oznacza nieobecności — ta reguła jest celowym ograniczeniem.
 - Rozłączenie po 60 sekundach pustej kolejki (kontrola co 5 sekund).
@@ -45,7 +53,7 @@ Liczba słuchaczy tego samego kanału nie mnoży strumieni wysyłanych przez bot
 7. Deploy. Otwórz `https://NAZWA.onrender.com/health`. Pole `discord_ready` powinno mieć wartość `true`.
    HTTP 200 oznacza działający proces HTTP, a nie potwierdzenie sprawności audio.
 8. UptimeRobot → monitor HTTP(S) → ten sam adres `/health`, interwał 5 minut, jeżeli dostępny w Twoim planie.
-9. Wejdź na dowolny zwykły kanał głosowy dostępny dla bota i użyj `/play link:LINK_DO_FILMU`.
+9. Wejdź na dowolny zwykły kanał głosowy dostępny dla bota i użyj `/play utwor:reto ua` lub podaj link.
    Sprawdź `/queue`, `/skip`, `/stop`. Na wszystkich tych kanałach bot potrzebuje View Channel, Connect i Speak.
 10. Na Render sprawdzaj Metrics → Outbound Bandwidth oraz Billing → zużycie całego workspace.
     Bez podpiętej metody płatności przekroczenie transferu skutkuje zawieszeniem usług do kolejnego miesiąca;
