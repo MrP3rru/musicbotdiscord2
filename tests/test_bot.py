@@ -5,10 +5,19 @@ from unittest.mock import AsyncMock, patch
 from limits import youtube_url, track_duration, DAILY_SECONDS, listener_stop_reason, playlist_url
 from types import SimpleNamespace
 from bot import (MusicBot, register, extract, resolve, recommendation, play_input, playlist_tracks,
-                 youtube_failure, safe_diagnostic, ytdlp_json)
+                 youtube_failure, safe_diagnostic, ytdlp_json, stream_options)
+from bot import PlaybackControls
 
 
 class LimitsTests(unittest.TestCase):
+    def test_stream_options(self):
+        self.assertEqual(stream_options({}), '-nostdin -rw_timeout 15000000')
+        opts = stream_options({'http_headers': {'User-Agent': 'TestAgent', 'Referer': 'https://youtube.com'}})
+        self.assertIn('-user_agent TestAgent', opts)
+        self.assertIn('-referer https://youtube.com', opts)
+        bad_opts = stream_options({'http_headers': {'User-Agent': 'Evil\nAgent'}})
+        self.assertNotIn('-user_agent', bad_opts)
+
     def test_diagnostic_classification_and_redaction(self):
         self.assertIn('audio/YT_LOGIN', youtube_failure("Sign in to confirm you're not a bot", 'audio'))
         self.assertIn('YT_FORMAT', youtube_failure('Requested format is not available', 'audio'))
@@ -62,6 +71,58 @@ class LimitsTests(unittest.TestCase):
 
 
 class BotTests(unittest.IsolatedAsyncioTestCase):
+    async def test_playback_buttons_skip_stop_and_reject_stale(self):
+        from unittest.mock import Mock
+        bot = Mock()
+        bot.lock = asyncio.Lock()
+        bot.stop = AsyncMock()
+        view = PlaybackControls(bot)
+        self.assertEqual([button.label for button in view.children], ['Pomiń', 'Zatrzymaj'])
+        bot.controls = view
+        interaction = AsyncMock()
+        await view.action(interaction, stop=False)
+        bot.voice.stop.assert_called_once()
+        self.assertTrue(bot.skipped)
+        await view.action(interaction, stop=True)
+        bot.stop.assert_awaited_once()
+        bot.controls = None
+        bot.voice.stop.reset_mock()
+        await view.action(interaction, stop=False)
+        bot.voice.stop.assert_not_called()
+        self.assertIn('zakończonego', interaction.followup.send.call_args.args[0])
+        await view.retire()
+        self.assertTrue(all(button.disabled for button in view.children))
+
+    async def test_buttons_require_same_voice_channel(self):
+        from unittest.mock import Mock
+        bot = Mock()
+        bot.lock = asyncio.Lock()
+        bot.check.side_effect = ValueError('Dołącz do kanału bota.')
+        view = PlaybackControls(bot)
+        interaction = AsyncMock()
+        await view.action(interaction, stop=False)
+        bot.voice.stop.assert_not_called()
+        self.assertIn('Dołącz', interaction.followup.send.call_args.args[0])
+        view.stop()
+
+    async def test_extract_uses_mweb_and_local_po_provider(self):
+        info = {'url': 'https://example.com/audio', 'duration': 100}
+        with patch('bot.ytdlp_json', AsyncMock(return_value=info)) as fetch:
+            await extract('https://www.youtube.com/watch?v=abcdefghijk')
+        self.assertIn('youtube:player_client=mweb', fetch.call_args.args)
+        self.assertIn('youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416', fetch.call_args.args)
+
+    async def test_format_fallback_is_bounded_and_login_is_not_retried(self):
+        info = {'url': 'https://example.com/audio', 'duration': 100}
+        with patch('bot.ytdlp_json', AsyncMock(side_effect=[ValueError('[audio/YT_FORMAT]'), info])) as fetch:
+            self.assertEqual((await extract('url'))[1], 100)
+            self.assertEqual(fetch.await_count, 2)
+            self.assertNotIn('youtube:player_client=mweb', fetch.call_args.args)
+        with patch('bot.ytdlp_json', AsyncMock(side_effect=ValueError('[audio/YT_LOGIN]'))) as fetch:
+            with self.assertRaises(ValueError):
+                await extract('url')
+            self.assertEqual(fetch.await_count, 1)
+
     async def test_failed_extractor_reports_stage(self):
         from unittest.mock import Mock
         proc = Mock(returncode=1)

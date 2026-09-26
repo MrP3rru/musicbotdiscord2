@@ -2,6 +2,22 @@
 
 Wariant startowy: bot i audio działają na Render. Nie jest jeszcze wdrożony.
 Python 3.11, discord.py z DAVE, yt-dlp, Deno i FFmpeg w obrazie Docker.
+Generator PO `bgutil-ytdlp-pot-provider` 2.0.0 działa w tej samej usłudze na
+`127.0.0.1:4416`. Nie potrzebuje tokena Discord ani ciasteczek konta Google.
+Obraz kopiuje Node.js i generator z obrazu autora; wtyczka Python ma tę samą wersję.
+Odtwarzanie używa klienta YouTube `mweb`. Start bota czeka na gotowość generatora;
+awaria generatora kończy proces, zamiast zostawiać niedziałającego bota online.
+Generator zwiększa zużycie RAM; limit sterty Node to 128 MB (nie jest to limit całego procesu).
+PO token nie gwarantuje usunięcia blokady IP lub wymogu logowania YouTube.
+Gdy `mweb` nie udostępnia formatu, bot wykonuje jedną próbę standardowym klientem;
+nie ponawia odmowy logowania ani limitu żądań. Maksymalny czas ekstrakcji audio to
+60 sekund na próbę; wyszukiwanie i playlisty mają nadal limit 40 sekund.
+Sprawdzenie lokalne potwierdziło start generatora i uzyskanie URL z PO tokenem,
+ale test odczytu audio otrzymał HTTP 403. Działanie na Renderze pozostaje niepotwierdzone.
+
+Przy odtwarzaniu bot wysyła tytuł, link i długość utworu oraz przyciski **Pomiń**
+i **Zatrzymaj**. Sterowanie jest dostępne tylko na tym samym kanale głosowym.
+Panele zakończonych utworów są wyłączane. Bot potrzebuje Send Messages na kanale tekstowym.
 
 ## Ograniczenia
 

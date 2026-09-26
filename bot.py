@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -13,11 +14,21 @@ from collections import deque
 import discord
 from discord import app_commands
 from aiohttp import web
+from provider import token_provider
 
 from limits import (MAX_TRACK, MAX_QUEUE, DAILY_SECONDS, IDLE_SECONDS, AUDIO_BITRATE,
                     youtube_url, track_duration, listener_stop_reason, playlist_url, PLAYLIST_SCAN_LIMIT)
 
 log = logging.getLogger('music')
+
+
+def stream_options(info):
+    options = '-nostdin -rw_timeout 15000000'
+    for header, flag in (('User-Agent', '-user_agent'), ('Referer', '-referer')):
+        value = info.get('http_headers', {}).get(header)
+        if value and '\r' not in value and '\n' not in value:
+            options += f' {flag} {shlex.quote(value)}'
+    return options
 
 
 def safe_diagnostic(value):
@@ -54,6 +65,7 @@ async def ytdlp_json(target, *options):
     stage = 'search' if target.startswith('ytsearch') else ('playlist' if '--flat-playlist' in options else 'audio')
     proc = await asyncio.create_subprocess_exec(
         sys.executable, '-m', 'yt_dlp', '--ignore-config',
+        '--js-runtimes', 'node',
         '--skip-download', '--dump-single-json',
         '--socket-timeout', '10', '--retries', '1', '--extractor-retries', '1',
         '--no-cache-dir', *options, '--', target,
@@ -61,10 +73,10 @@ async def ytdlp_json(target, *options):
     )
     try:
         try:
-            output, error = await asyncio.wait_for(proc.communicate(), 40)
+            output, error = await asyncio.wait_for(proc.communicate(), 60 if stage == 'audio' else 40)
         except asyncio.TimeoutError:
             log.warning('YouTube stage=%s code=TIMEOUT', stage)
-            raise ValueError(f'YouTube nie odpowiedział w ciągu 40 sekund. [{stage}/YT_TIMEOUT]') from None
+            raise ValueError(f'Przekroczono czas oczekiwania na YouTube. [{stage}/YT_TIMEOUT]') from None
         if proc.returncode:
             detail = (error or b'').decode('utf-8', errors='replace')
             log.warning('YouTube stage=%s exit=%s details=%s', stage, proc.returncode, safe_diagnostic(detail))
@@ -128,11 +140,61 @@ async def playlist_tracks(url):
 
 
 async def extract(url):
-    info = await ytdlp_json(url, '--no-playlist', '-f', 'bestaudio[abr<=80]/worstaudio')
+    options = ('--no-playlist', '--extractor-args',
+               'youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416',
+               '-f', 'bestaudio[abr<=80]/worstaudio')
+    try:
+        info = await ytdlp_json(url, *options, '--extractor-args', 'youtube:player_client=mweb')
+    except ValueError as exc:
+        if '[audio/YT_FORMAT]' not in str(exc):
+            raise
+        log.info('Brak formatu mweb; jedna próba standardowym klientem z generatorem PO.')
+        info = await ytdlp_json(url, *options)
     duration = track_duration(info)
     if not info.get('url', '').startswith('https://'):
         raise ValueError('Brak obsługiwanego strumienia audio.')
     return info, duration
+
+
+class PlaybackControls(discord.ui.View):
+    def __init__(self, bot):
+        super().__init__(timeout=MAX_TRACK + 60)
+        self.bot = bot
+        self.message = None
+
+    async def retire(self):
+        for button in self.children:
+            button.disabled = True
+        self.stop()
+        if self.message:
+            with contextlib.suppress(discord.HTTPException):
+                await self.message.edit(view=self)
+
+    async def action(self, interaction, stop):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            async with self.bot.lock:
+                self.bot.check(interaction)
+                if self.bot.controls is not self or not self.bot.voice or not self.bot.voice.is_playing():
+                    raise ValueError('Ten panel dotyczy zakończonego utworu.')
+                if stop:
+                    await self.bot.stop()
+                    text = 'Zatrzymano muzykę i wyczyszczono kolejkę.'
+                else:
+                    self.bot.skipped = True
+                    self.bot.voice.stop()
+                    text = 'Pominięto utwór.'
+            await interaction.followup.send(text, ephemeral=True)
+        except ValueError as exc:
+            await interaction.followup.send(str(exc), ephemeral=True)
+
+    @discord.ui.button(label='Pomiń', emoji='⏭', style=discord.ButtonStyle.primary)
+    async def skip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.action(interaction, stop=False)
+
+    @discord.ui.button(label='Zatrzymaj', emoji='⏹', style=discord.ButtonStyle.danger)
+    async def stop_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.action(interaction, stop=True)
 
 
 class MusicBot(discord.Client):
@@ -157,6 +219,7 @@ class MusicBot(discord.Client):
         self.autoplay = True
         self.seen = deque(maxlen=100)
         self.skipped = False
+        self.controls = None
 
     async def setup_hook(self):
         self.tree.copy_global_to(guild=discord.Object(id=self.guild_id))
@@ -225,6 +288,7 @@ class MusicBot(discord.Client):
                 url, text_channel = self.queue.popleft()
                 self.current = 'Przygotowanie utworu…'
                 source = None
+                controls = None
                 completed = False
                 self.skipped = False
                 try:
@@ -254,7 +318,7 @@ class MusicBot(discord.Client):
                     self.current = discord.utils.escape_markdown(info.get('title', 'Utwór')[:150])
                     source = discord.FFmpegOpusAudio(
                         info['url'], bitrate=AUDIO_BITRATE, codec='libopus',
-                        before_options='-nostdin -rw_timeout 15000000',
+                        before_options=stream_options(info),
                         options=f'-vn -threads 1 -vbr off -t {duration}',
                         stderr=subprocess.DEVNULL,
                     )
@@ -266,7 +330,14 @@ class MusicBot(discord.Client):
                             errors.append(type(error).__name__)
                         loop.call_soon_threadsafe(done.set)
                     self.voice.play(source, after=after)
-                    await self.say(text_channel, f'▶ {self.current}')
+                    controls = PlaybackControls(self)
+                    self.controls = controls
+                    with contextlib.suppress(discord.HTTPException):
+                        controls.message = await text_channel.send(
+                            f'🎵 **Teraz gra:** {self.current}\n'
+                            f'<{youtube_url("https://youtu.be/" + info["id"])}>\n'
+                            f'Czas: {duration // 60}:{duration % 60:02d} • Opus {AUDIO_BITRATE} kb/s',
+                            view=controls)
                     await asyncio.wait_for(done.wait(), duration + 15)
                     if errors:
                         raise ValueError('Odtwarzanie zostało przerwane.')
@@ -283,6 +354,10 @@ class MusicBot(discord.Client):
                     if source:
                         source.cleanup()
                     self.current = None
+                    if controls:
+                        if self.controls is controls:
+                            self.controls = None
+                        await controls.retire()
                 if completed and self.autoplay and not self.queue and self.budget() >= MAX_TRACK + 1:
                     self.current = 'Szukanie kolejnego utworu w miksie YouTube…'
                     try:
@@ -433,8 +508,18 @@ async def main():
     await runner.setup()
     await web.TCPSite(runner, '0.0.0.0', int(os.environ.get('PORT', '10000'))).start()
     try:
-        async with bot:
-            await bot.start(token)
+        async with token_provider() as provider, bot:
+            playback = asyncio.create_task(bot.start(token))
+            provider_exit = asyncio.create_task(provider.wait())
+            try:
+                done, _ = await asyncio.wait((playback, provider_exit), return_when=asyncio.FIRST_COMPLETED)
+                if provider_exit in done:
+                    raise RuntimeError('Generator PO zatrzymał się. Usługa wymaga ponownego uruchomienia.')
+                await playback
+            finally:
+                playback.cancel()
+                provider_exit.cancel()
+                await asyncio.gather(playback, provider_exit, return_exceptions=True)
     finally:
         await runner.cleanup()
 
