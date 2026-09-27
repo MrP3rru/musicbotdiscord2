@@ -31,6 +31,19 @@ class CookieTests(unittest.TestCase):
 
 
 class AuthExtractionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cookie_session_uses_authenticated_default_clients(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / 'cookies.txt'
+            source.write_text('# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tSID\tfake-secret\n')
+            with patch.dict(os.environ, {'YOUTUBE_COOKIES_FILE': str(source)}), \
+                 patch('bot._ytdlp_json', AsyncMock(return_value={})) as extract:
+                await ytdlp_json('https://www.youtube.com/watch?v=abcdefghijk',
+                                 '--extractor-args', 'youtube:player_client=mweb')
+            options = extract.call_args.args[1]
+            self.assertIn('youtube:player_client=default', options)
+            self.assertNotIn('youtube:player_client=mweb', options)
+            self.assertEqual(extract.call_args.args[2][0], '--cookies')
+
     async def test_subprocess_uses_copy_and_logs_no_session_data(self):
         with tempfile.TemporaryDirectory() as root:
             source = Path(root) / 'cookies.txt'

@@ -106,6 +106,9 @@ Jeśli ustawiłeś również `YOUTUBE_COOKIES_FILE`, usuń tę zmienną.
 Własną ścieżkę można ustawić przez `YOUTUBE_COOKIES_FILE`, ale domyślnie nie jest to potrzebne.
 Bot filtruje cookies do domen YouTube i używa prywatnej, tymczasowej kopii,
 ponieważ yt-dlp zapisuje plik cookies, a sekret Rendera może być tylko do odczytu.
+Z plikiem cookies bot pozostawia dobór klientów zalogowanego konta bibliotece yt-dlp,
+zamiast wymuszać `mweb`. Wpis `session_file=loaded client=default` potwierdza
+odczyt pliku, ale nie potwierdza ważności sesji ani zaakceptowania logowania przez YouTube.
 Testy sesji używają fikcyjnych cookies; nie potwierdzają logowania do prawdziwego konta.
 Uwierzytelnienie nie gwarantuje zdjęcia blokady YouTube i może skutkować ograniczeniem konta.
 

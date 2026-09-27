@@ -64,11 +64,18 @@ def youtube_failure(detail, stage):
 
 async def ytdlp_json(target, *options):
     with cookie_arguments() as auth_args:
+        if auth_args:
+            # Let yt-dlp select its authenticated client set after loading the jar.
+            options = tuple('youtube:player_client=default' if option == 'youtube:player_client=mweb'
+                            else option for option in options)
         return await _ytdlp_json(target, options, auth_args)
 
 
 async def _ytdlp_json(target, options, auth_args):
     stage = 'search' if target.startswith('ytsearch') else ('playlist' if '--flat-playlist' in options else 'audio')
+    log.info('YouTube stage=%s session_file=%s client=%s', stage,
+             'loaded' if auth_args else 'absent',
+             'mweb' if 'youtube:player_client=mweb' in options else 'default')
     proc = await asyncio.create_subprocess_exec(
         sys.executable, '-m', 'yt_dlp', '--ignore-config',
         '--js-runtimes', 'node',
