@@ -9,8 +9,8 @@ Odtwarzanie zaczyna od domyślnych klientów YouTube. Start bota czeka na gotowo
 awaria generatora kończy proces, zamiast zostawiać niedziałającego bota online.
 Generator zwiększa zużycie RAM; limit sterty Node to 128 MB (nie jest to limit całego procesu).
 PO token nie gwarantuje usunięcia blokady IP lub wymogu logowania YouTube.
-Gdy brakuje osobnego audio, bot wykonuje jedną próbę klientem `web_safari`, który może
-udostępnić HLS z dźwiękiem i obrazem. W takim przypadku akceptowane jest najwyżej 144p;
+Gdy brakuje osobnego audio, bot wykonuje jedną próbę bez cookies, z domyślnymi
+klientami sesji anonimowej i generatorem PO. Może też użyć strumienia z obrazem do 144p;
 FFmpeg odrzuca obraz, a Discord nadal dostaje Opus 48 kb/s. Ruch przychodzący może wzrosnąć.
 Nie gwarantuje to dostępności HLS dla konkretnej sesji.
 Bot nie ponawia odmowy logowania ani limitu żądań. Maksymalny czas ekstrakcji audio to
@@ -110,7 +110,7 @@ Własną ścieżkę można ustawić przez `YOUTUBE_COOKIES_FILE`, ale domyślnie
 Bot filtruje cookies do domen YouTube i używa prywatnej, tymczasowej kopii,
 ponieważ yt-dlp zapisuje plik cookies, a sekret Rendera może być tylko do odczytu.
 Z plikiem cookies bot pozostawia dobór klientów zalogowanego konta bibliotece yt-dlp,
-zamiast wymuszać `mweb`. Próba zapasowa zachowuje `web_safari` także z cookies.
+zamiast wymuszać `mweb`. Próba zapasowa nie odczytuje ani nie przekazuje cookies.
 Wpis `session_file=loaded client=default` potwierdza
 odczyt pliku, ale nie potwierdza ważności sesji ani zaakceptowania logowania przez YouTube.
 Testy sesji używają fikcyjnych cookies; nie potwierdzają logowania do prawdziwego konta.

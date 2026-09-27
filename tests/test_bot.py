@@ -117,8 +117,8 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         with patch('bot.ytdlp_json', AsyncMock(side_effect=[ValueError('[audio/YT_FORMAT]'), info])) as fetch:
             self.assertEqual((await extract('url'))[1], 100)
             self.assertEqual(fetch.await_count, 2)
-            self.assertIn('youtube:player_client=web_safari', fetch.call_args.args)
-            self.assertIn('worstaudio/worst[height<=144][acodec!=none][vcodec!=none]', fetch.call_args.args)
+            self.assertEqual(fetch.call_args.kwargs, {'use_cookies': False})
+            self.assertIn('bestaudio[abr<=80]/worstaudio/worst[height<=144][acodec!=none][vcodec!=none]', fetch.call_args.args)
         with patch('bot.ytdlp_json', AsyncMock(side_effect=ValueError('[audio/YT_LOGIN]'))) as fetch:
             with self.assertRaises(ValueError):
                 await extract('url')

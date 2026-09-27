@@ -31,6 +31,13 @@ class CookieTests(unittest.TestCase):
 
 
 class AuthExtractionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_anonymous_attempt_never_reads_cookie_secret(self):
+        with patch('bot.cookie_arguments') as cookies, \
+             patch('bot._ytdlp_json', AsyncMock(return_value={})) as extract:
+            await ytdlp_json('https://www.youtube.com/watch?v=abcdefghijk', use_cookies=False)
+        cookies.assert_not_called()
+        self.assertEqual(extract.call_args.args[2], [])
+
     async def test_cookie_session_preserves_explicit_fallback_client(self):
         with tempfile.TemporaryDirectory() as root:
             source = Path(root) / 'cookies.txt'

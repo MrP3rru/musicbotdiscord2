@@ -80,7 +80,9 @@ def diagnostic_flags(detail):
     return ','.join(name for name, values in markers.items() if any(value in lower for value in values)) or 'none'
 
 
-async def ytdlp_json(target, *options):
+async def ytdlp_json(target, *options, use_cookies=True):
+    if not use_cookies:
+        return await _ytdlp_json(target, options, [])
     with cookie_arguments() as auth_args:
         return await _ytdlp_json(target, options, auth_args)
 
@@ -180,11 +182,12 @@ async def extract(url):
     except ValueError as exc:
         if '[audio/YT_FORMAT]' not in str(exc):
             raise
-        log.info('Brak osobnego audio; jedna próba klientem web_safari (HLS do 144p).')
-        # Safari can provide HLS with multiplexed sound even when audio-only
-        # formats are unavailable. Bound video resolution; FFmpeg discards video.
-        info = await ytdlp_json(url, *options, '--extractor-args', 'youtube:player_client=web_safari',
-                               '-f', 'worstaudio/worst[height<=144][acodec!=none][vcodec!=none]')
+        log.info('Brak formatu; jedna próba bez cookies z generatorem PO (audio lub HLS do 144p).')
+        # Account cookies change yt-dlp's default clients. Try the anonymous
+        # client set in a separate process, with no account data or shared cache.
+        info = await ytdlp_json(url, *options,
+                               '-f', 'bestaudio[abr<=80]/worstaudio/worst[height<=144][acodec!=none][vcodec!=none]',
+                               use_cookies=False)
     duration = track_duration(info)
     if not info.get('url', '').startswith('https://'):
         raise ValueError('Brak obsługiwanego strumienia audio.')
