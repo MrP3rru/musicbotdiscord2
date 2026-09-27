@@ -84,6 +84,31 @@ Render może restartować darmowe usługi. Kolejka i licznik znikają po restarc
 W razie problemu z audio sprawdź prawa Connect/Speak, połączenie głosowe oraz inny krótki film.
 Nie ma gwarancji działania YouTube z IP Render. Używaj materiałów, do których odtwarzania masz prawo.
 
+## Opcjonalna sesja YouTube na Renderze
+
+1. Na osobnym koncie zaloguj się na YouTube w prywatnym oknie przeglądarki.
+2. Do eksportu użyj rozszerzenia wskazanego w FAQ yt-dlp, np. **Get cookies.txt LOCALLY**
+   dla Chrome (włącz dostęp w incognito). Eksportuj wyłącznie cookies youtube.com w formacie Netscape.
+   Otwórz w tym samym oknie `https://www.youtube.com/robots.txt`, wyeksportuj cookies i zamknij okno.
+   Nie wylogowuj się przed eksportem. Szczegóły:
+   https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies
+   https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp
+3. Render → musicbotdiscord2 → Environment → Secret Files → Add Secret File.
+   Filename: `youtube-cookies.txt`. Contents: zawartość wyeksportowanego pliku.
+   Zapisz zmiany i wdróż najnowszy commit. Render udostępnia plik jako
+   `/etc/secrets/youtube-cookies.txt`; bot wykrywa tę nazwę automatycznie.
+4. Wejdź na kanał Discord i sprawdź jeden utwór przez `/play`.
+
+Nie publikuj pliku ani jego zawartości w czacie, repozytorium lub logach.
+Sesja może wygasnąć; wtedy wymień zawartość Secret File i wykonaj ponowne wdrożenie.
+Możesz zrezygnować, usuwając Secret File i ponownie wdrażając usługę.
+Jeśli ustawiłeś również `YOUTUBE_COOKIES_FILE`, usuń tę zmienną.
+Własną ścieżkę można ustawić przez `YOUTUBE_COOKIES_FILE`, ale domyślnie nie jest to potrzebne.
+Bot filtruje cookies do domen YouTube i używa prywatnej, tymczasowej kopii,
+ponieważ yt-dlp zapisuje plik cookies, a sekret Rendera może być tylko do odczytu.
+Testy sesji używają fikcyjnych cookies; nie potwierdzają logowania do prawdziwego konta.
+Uwierzytelnienie nie gwarantuje zdjęcia blokady YouTube i może skutkować ograniczeniem konta.
+
 ## Oddzielny serwer audio
 
 Można przerobić projekt na klienta Lavalink: Render wysyła wyłącznie komendy,

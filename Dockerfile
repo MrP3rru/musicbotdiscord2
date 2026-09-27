@@ -10,7 +10,7 @@ COPY --from=pot /app /opt/pot
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY bot.py limits.py provider.py ./
+COPY bot.py limits.py provider.py youtube_auth.py ./
 RUN useradd --create-home bot && chown -R bot:bot /app /opt/venv
 USER bot
 CMD ["/opt/venv/bin/python", "bot.py"]

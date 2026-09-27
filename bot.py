@@ -15,6 +15,7 @@ import discord
 from discord import app_commands
 from aiohttp import web
 from provider import token_provider
+from youtube_auth import cookie_arguments
 
 from limits import (MAX_TRACK, MAX_QUEUE, DAILY_SECONDS, IDLE_SECONDS, AUDIO_BITRATE,
                     youtube_url, track_duration, listener_stop_reason, playlist_url, PLAYLIST_SCAN_LIMIT)
@@ -62,13 +63,18 @@ def youtube_failure(detail, stage):
 
 
 async def ytdlp_json(target, *options):
+    with cookie_arguments() as auth_args:
+        return await _ytdlp_json(target, options, auth_args)
+
+
+async def _ytdlp_json(target, options, auth_args):
     stage = 'search' if target.startswith('ytsearch') else ('playlist' if '--flat-playlist' in options else 'audio')
     proc = await asyncio.create_subprocess_exec(
         sys.executable, '-m', 'yt_dlp', '--ignore-config',
         '--js-runtimes', 'node',
         '--skip-download', '--dump-single-json',
         '--socket-timeout', '10', '--retries', '1', '--extractor-retries', '1',
-        '--no-cache-dir', *options, '--', target,
+        '--no-cache-dir', *auth_args, *options, '--', target,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )
     try:
@@ -79,8 +85,12 @@ async def ytdlp_json(target, *options):
             raise ValueError(f'Przekroczono czas oczekiwania na YouTube. [{stage}/YT_TIMEOUT]') from None
         if proc.returncode:
             detail = (error or b'').decode('utf-8', errors='replace')
-            log.warning('YouTube stage=%s exit=%s details=%s', stage, proc.returncode, safe_diagnostic(detail))
-            raise ValueError(youtube_failure(detail, stage))
+            message = youtube_failure(detail, stage)
+            if auth_args:
+                log.warning('YouTube stage=%s exit=%s auth=cookies error=%s', stage, proc.returncode, message)
+            else:
+                log.warning('YouTube stage=%s exit=%s details=%s', stage, proc.returncode, safe_diagnostic(detail))
+            raise ValueError(message)
         return json.loads(output)
     finally:
         if proc.returncode is None:
