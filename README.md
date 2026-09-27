@@ -1,19 +1,22 @@
 # Discord Music Lite — Render Free
 
-Wariant startowy: bot i audio działają na Render. Nie jest jeszcze wdrożony.
-Python 3.11, discord.py z DAVE, yt-dlp, Deno i FFmpeg w obrazie Docker.
+Wariant startowy: bot i audio działają w jednej usłudze Render.
+Python 3.11, discord.py z DAVE, yt-dlp, Node.js i FFmpeg w obrazie Docker.
 Generator PO `bgutil-ytdlp-pot-provider` 2.0.0 działa w tej samej usłudze na
 `127.0.0.1:4416`. Nie potrzebuje tokena Discord ani ciasteczek konta Google.
-Obraz kopiuje Node.js i generator z obrazu autora; wtyczka Python ma tę samą wersję.
-Odtwarzanie używa klienta YouTube `mweb`. Start bota czeka na gotowość generatora;
+Obraz bazuje na Node.js i kopiuje generator z obrazu autora; wtyczka Python ma tę samą wersję.
+Odtwarzanie zaczyna od domyślnych klientów YouTube. Start bota czeka na gotowość generatora;
 awaria generatora kończy proces, zamiast zostawiać niedziałającego bota online.
 Generator zwiększa zużycie RAM; limit sterty Node to 128 MB (nie jest to limit całego procesu).
 PO token nie gwarantuje usunięcia blokady IP lub wymogu logowania YouTube.
-Gdy `mweb` nie udostępnia formatu, bot wykonuje jedną próbę standardowym klientem;
-nie ponawia odmowy logowania ani limitu żądań. Maksymalny czas ekstrakcji audio to
+Gdy brakuje osobnego audio, bot wykonuje jedną próbę klientem `web_safari`, który może
+udostępnić HLS z dźwiękiem i obrazem. W takim przypadku akceptowane jest najwyżej 144p;
+FFmpeg odrzuca obraz, a Discord nadal dostaje Opus 48 kb/s. Ruch przychodzący może wzrosnąć.
+Nie gwarantuje to dostępności HLS dla konkretnej sesji.
+Bot nie ponawia odmowy logowania ani limitu żądań. Maksymalny czas ekstrakcji audio to
 60 sekund na próbę; wyszukiwanie i playlisty mają nadal limit 40 sekund.
-Sprawdzenie lokalne potwierdziło start generatora i uzyskanie URL z PO tokenem,
-ale test odczytu audio otrzymał HTTP 403. Działanie na Renderze pozostaje niepotwierdzone.
+Ostatni test lokalny bez cookies potwierdził start generatora i odczyt 4096 bajtów
+audio (HTTP 206, format 250). Odtwarzanie na Renderze i zapasowy HLS pozostają niepotwierdzone.
 
 Przy odtwarzaniu bot wysyła tytuł, link i długość utworu oraz przyciski **Pomiń**
 i **Zatrzymaj**. Sterowanie jest dostępne tylko na tym samym kanale głosowym.
@@ -107,7 +110,8 @@ Własną ścieżkę można ustawić przez `YOUTUBE_COOKIES_FILE`, ale domyślnie
 Bot filtruje cookies do domen YouTube i używa prywatnej, tymczasowej kopii,
 ponieważ yt-dlp zapisuje plik cookies, a sekret Rendera może być tylko do odczytu.
 Z plikiem cookies bot pozostawia dobór klientów zalogowanego konta bibliotece yt-dlp,
-zamiast wymuszać `mweb`. Wpis `session_file=loaded client=default` potwierdza
+zamiast wymuszać `mweb`. Próba zapasowa zachowuje `web_safari` także z cookies.
+Wpis `session_file=loaded client=default` potwierdza
 odczyt pliku, ale nie potwierdza ważności sesji ani zaakceptowania logowania przez YouTube.
 Testy sesji używają fikcyjnych cookies; nie potwierdzają logowania do prawdziwego konta.
 Uwierzytelnienie nie gwarantuje zdjęcia blokady YouTube i może skutkować ograniczeniem konta.

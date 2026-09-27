@@ -82,10 +82,6 @@ def diagnostic_flags(detail):
 
 async def ytdlp_json(target, *options):
     with cookie_arguments() as auth_args:
-        if auth_args:
-            # Let yt-dlp select its authenticated client set after loading the jar.
-            options = tuple('youtube:player_client=default' if option == 'youtube:player_client=mweb'
-                            else option for option in options)
         return await _ytdlp_json(target, options, auth_args)
 
 
@@ -93,7 +89,8 @@ async def _ytdlp_json(target, options, auth_args):
     stage = 'search' if target.startswith('ytsearch') else ('playlist' if '--flat-playlist' in options else 'audio')
     log.info('YouTube stage=%s session_file=%s client=%s', stage,
              'loaded' if auth_args else 'absent',
-             'mweb' if 'youtube:player_client=mweb' in options else 'default')
+             next((option.split('=', 1)[1] for option in options
+                   if option.startswith('youtube:player_client=')), 'default'))
     proc = await asyncio.create_subprocess_exec(
         sys.executable, '-m', 'yt_dlp', '--ignore-config',
         '--js-runtimes', 'node',
@@ -177,15 +174,17 @@ async def playlist_tracks(url):
 
 async def extract(url):
     options = ('--no-playlist', '--extractor-args',
-               'youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416',
-               '-f', 'bestaudio[abr<=80]/worstaudio')
+               'youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416')
     try:
-        info = await ytdlp_json(url, *options, '--extractor-args', 'youtube:player_client=mweb')
+        info = await ytdlp_json(url, *options, '-f', 'bestaudio[abr<=80]/worstaudio')
     except ValueError as exc:
         if '[audio/YT_FORMAT]' not in str(exc):
             raise
-        log.info('Brak formatu mweb; jedna próba standardowym klientem z generatorem PO.')
-        info = await ytdlp_json(url, *options)
+        log.info('Brak osobnego audio; jedna próba klientem web_safari (HLS do 144p).')
+        # Safari can provide HLS with multiplexed sound even when audio-only
+        # formats are unavailable. Bound video resolution; FFmpeg discards video.
+        info = await ytdlp_json(url, *options, '--extractor-args', 'youtube:player_client=web_safari',
+                               '-f', 'worstaudio/worst[height<=144][acodec!=none][vcodec!=none]')
     duration = track_duration(info)
     if not info.get('url', '').startswith('https://'):
         raise ValueError('Brak obsługiwanego strumienia audio.')
@@ -352,6 +351,9 @@ class MusicBot(discord.Client):
                     self.used += duration  # Reserve full duration, also for skipped tracks.
                     self.seen.append(info['id'])
                     self.current = discord.utils.escape_markdown(info.get('title', 'Utwór')[:150])
+                    if info.get('vcodec') not in (None, 'none'):
+                        await self.say(text_channel, 'YouTube udostępnił tylko strumień z obrazem. '
+                                       'Używam najniższej rozdzielczości do 144p i wysyłam wyłącznie dźwięk.')
                     source = discord.FFmpegOpusAudio(
                         info['url'], bitrate=AUDIO_BITRATE, codec='libopus',
                         before_options=stream_options(info),

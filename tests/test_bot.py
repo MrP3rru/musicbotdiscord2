@@ -105,11 +105,11 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('Dołącz', interaction.followup.send.call_args.args[0])
         view.stop()
 
-    async def test_extract_uses_mweb_and_local_po_provider(self):
+    async def test_extract_uses_default_clients_and_local_po_provider(self):
         info = {'url': 'https://example.com/audio', 'duration': 100}
         with patch('bot.ytdlp_json', AsyncMock(return_value=info)) as fetch:
             await extract('https://www.youtube.com/watch?v=abcdefghijk')
-        self.assertIn('youtube:player_client=mweb', fetch.call_args.args)
+        self.assertFalse(any('player_client=' in arg for arg in fetch.call_args.args))
         self.assertIn('youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416', fetch.call_args.args)
 
     async def test_format_fallback_is_bounded_and_login_is_not_retried(self):
@@ -117,7 +117,8 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         with patch('bot.ytdlp_json', AsyncMock(side_effect=[ValueError('[audio/YT_FORMAT]'), info])) as fetch:
             self.assertEqual((await extract('url'))[1], 100)
             self.assertEqual(fetch.await_count, 2)
-            self.assertNotIn('youtube:player_client=mweb', fetch.call_args.args)
+            self.assertIn('youtube:player_client=web_safari', fetch.call_args.args)
+            self.assertIn('worstaudio/worst[height<=144][acodec!=none][vcodec!=none]', fetch.call_args.args)
         with patch('bot.ytdlp_json', AsyncMock(side_effect=ValueError('[audio/YT_LOGIN]'))) as fetch:
             with self.assertRaises(ValueError):
                 await extract('url')
