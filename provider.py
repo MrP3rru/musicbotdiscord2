@@ -10,12 +10,27 @@ log = logging.getLogger('music.provider')
 
 
 async def _provider_log(stream):
-    """Forward only bounded provider diagnostics to Render's ordinary logs."""
+    """Log fixed status messages only: upstream prints raw tokens to stdout."""
     lines = 0
     async for raw_line in stream:
+        value = raw_line.decode('utf-8', errors='replace').lower()
+        if 'started pot server' in value:
+            message = 'Serwer generatora PO uruchomiony.'
+        elif 'potoken:' in value or 'generated integritytoken' in value:
+            message = 'Wygenerowano token (wartość ukryta).'
+        elif 'heap out of memory' in value:
+            message = 'Generatorowi zabrakło pamięci.'
+        elif 'cannot find module' in value or 'module_not_found' in value:
+            message = 'Generator nie znalazł wymaganego modułu.'
+        elif 'eaddrinuse' in value:
+            message = 'Port generatora jest zajęty.'
+        elif 'error' in value or 'failed' in value:
+            message = 'Generator zgłosił błąd (surowa treść ukryta).'
+        else:
+            continue
         lines += 1
         if lines <= 50:
-            log.info('PO: %s', raw_line.decode('utf-8', errors='replace').rstrip())
+            log.info('PO: %s', message)
         elif lines == 51:
             log.warning('PO: dalsze komunikaty generatora zostały wyciszone.')
 

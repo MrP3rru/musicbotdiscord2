@@ -44,7 +44,10 @@ def safe_diagnostic(value):
 
 
 def youtube_failure(detail, stage):
-    lower = detail.lower().replace('’', "'")
+    # Earlier warnings can mention 403 even when the terminal error is missing
+    # formats or an expired session. Classify the actual final ERROR first.
+    errors = [line for line in detail.splitlines() if line.lstrip().startswith('ERROR:')]
+    lower = (errors[-1] if errors else detail).lower().replace('’', "'")
     if 'not a bot' in lower or 'confirm you' in lower:
         code, message = 'YT_LOGIN', 'YouTube żąda potwierdzenia, że użytkownik nie jest botem. Serwer nie uzyskał dostępu.'
     elif '429' in lower or 'too many requests' in lower:
@@ -60,6 +63,21 @@ def youtube_failure(detail, stage):
     else:
         code, message = 'YT_EXTRACT', 'Nie udało się odczytać danych YouTube. Szczegóły zapisano w logach Render.'
     return f'{message} [{stage}/{code}]'
+
+
+def diagnostic_flags(detail):
+    """Fixed labels, never upstream content or authentication values."""
+    lower = detail.lower()
+    markers = {
+        'cookies_expired': ('cookies are no longer valid', 'cookies have expired', 'cookies have likely been rotated'),
+        'player_api_failed': ('unable to download api page', 'unable to download player api'),
+        'media_access_failed': ('unable to download video data', 'unable to download fragment'),
+        'po_provider_failed': ('error reaching get /ping', 'error reaching post /get_pot'),
+        'po_token_missing': ('po token which was not provided',),
+        'js_challenge_failed': ('signature solving failed', 'n challenge solving failed'),
+        'sabr_only': ('sabr-only',),
+    }
+    return ','.join(name for name, values in markers.items() if any(value in lower for value in values)) or 'none'
 
 
 async def ytdlp_json(target, *options):
@@ -94,7 +112,8 @@ async def _ytdlp_json(target, options, auth_args):
             detail = (error or b'').decode('utf-8', errors='replace')
             message = youtube_failure(detail, stage)
             if auth_args:
-                log.warning('YouTube stage=%s exit=%s auth=cookies error=%s', stage, proc.returncode, message)
+                log.warning('YouTube stage=%s exit=%s auth=cookies flags=%s error=%s',
+                            stage, proc.returncode, diagnostic_flags(detail), message)
             else:
                 log.warning('YouTube stage=%s exit=%s details=%s', stage, proc.returncode, safe_diagnostic(detail))
             raise ValueError(message)
